@@ -1,0 +1,160 @@
+use playlist_bridge::playlist::{parse_m3u, parse_pls, write_m3u, write_pls, Track};
+
+fn track(path: &str, title: Option<&str>, duration: Option<i64>) -> Track {
+    Track { path: path.to_string(), title: title.map(str::to_string), duration }
+}
+
+struct ParseCase {
+    name: &'static str,
+    input: &'static str,
+    expected: Vec<Track>,
+}
+
+#[test]
+fn parse_m3u_cases() {
+    let cases = vec![
+        ParseCase {
+            name: "bare paths with no EXTINF at all",
+            input: "song1.mp3\nsong2.mp3\n",
+            expected: vec![
+                track("song1.mp3", None, None),
+                track("song2.mp3", None, None),
+            ],
+        },
+        ParseCase {
+            name: "unknown duration is -1, not dropped",
+            input: "#EXTM3U\n#EXTINF:-1,Live Stream\nhttp://example.com/stream\n",
+            expected: vec![track("http://example.com/stream", Some("Live Stream"), Some(-1))],
+        },
+        ParseCase {
+            name: "windows line endings",
+            input: "#EXTM3U\r\n#EXTINF:120,Some Title\r\nsong.mp3\r\n",
+            expected: vec![track("song.mp3", Some("Some Title"), Some(120))],
+        },
+        ParseCase {
+            name: "title containing a comma only splits on the first one",
+            input: "#EXTINF:200,Artist, Feat. Someone - Title\nsong.mp3\n",
+            expected: vec![track("song.mp3", Some("Artist, Feat. Someone - Title"), Some(200))],
+        },
+        ParseCase {
+            name: "non-EXTINF comment lines are ignored, not treated as paths",
+            input: "#EXTM3U\n#EXTVLCOPT:some-option=1\n#EXTINF:90,Track\nsong.mp3\n",
+            expected: vec![track("song.mp3", Some("Track"), Some(90))],
+        },
+        ParseCase {
+            name: "blank lines between entries are skipped",
+            input: "#EXTM3U\n\n#EXTINF:90,Track One\n\nsong1.mp3\n\n#EXTINF:95,Track Two\nsong2.mp3\n",
+            expected: vec![
+                track("song1.mp3", Some("Track One"), Some(90)),
+                track("song2.mp3", Some("Track Two"), Some(95)),
+            ],
+        },
+        ParseCase {
+            name: "unicode titles pass through untouched",
+            input: "#EXTINF:180,Café del Mar - Sueño Latino\nsong.mp3\n",
+            expected: vec![track("song.mp3", Some("Café del Mar - Sueño Latino"), Some(180))],
+        },
+        ParseCase {
+            name: "EXTINF with a trailing comma and no title",
+            input: "#EXTINF:180,\nsong.mp3\n",
+            expected: vec![track("song.mp3", None, Some(180))],
+        },
+    ];
+
+    for case in cases {
+        let actual = parse_m3u(case.input);
+        assert_eq!(actual, case.expected, "case failed: {}", case.name);
+    }
+}
+
+#[test]
+fn parse_pls_cases() {
+    let cases = vec![
+        ParseCase {
+            name: "entries out of order in the file are sorted by index",
+            input: "[playlist]\nFile2=song2.mp3\nTitle2=Second\nFile1=song1.mp3\nTitle1=First\nNumberOfEntries=2\n",
+            expected: vec![
+                track("song1.mp3", Some("First"), None),
+                track("song2.mp3", Some("Second"), None),
+            ],
+        },
+        ParseCase {
+            name: "missing NumberOfEntries is fine, we count keys ourselves",
+            input: "[playlist]\nFile1=song1.mp3\nTitle1=Only One\nLength1=42\n",
+            expected: vec![track("song1.mp3", Some("Only One"), Some(42))],
+        },
+        ParseCase {
+            name: "keys are case-insensitive",
+            input: "[playlist]\nfile1=song1.mp3\nTITLE1=Loud Title\nlEnGtH1=30\n",
+            expected: vec![track("song1.mp3", Some("Loud Title"), Some(30))],
+        },
+        ParseCase {
+            name: "an entry can be missing Length entirely",
+            input: "[playlist]\nFile1=song1.mp3\nTitle1=No Duration\nNumberOfEntries=1\n",
+            expected: vec![track("song1.mp3", Some("No Duration"), None)],
+        },
+        ParseCase {
+            name: "unrelated keys are ignored",
+            input: "[playlist]\nFile1=song1.mp3\nSomeRandomKey=whatever\nVersion=2\n",
+            expected: vec![track("song1.mp3", None, None)],
+        },
+    ];
+
+    for case in cases {
+        let actual = parse_pls(case.input);
+        assert_eq!(actual, case.expected, "case failed: {}", case.name);
+    }
+}
+
+struct WriteCase {
+    name: &'static str,
+    tracks: Vec<Track>,
+    expected: &'static str,
+}
+
+#[test]
+fn write_m3u_cases() {
+    let cases = vec![
+        WriteCase {
+            name: "missing title and duration fall back to empty and -1",
+            tracks: vec![track("song.mp3", None, None)],
+            expected: "#EXTM3U\n#EXTINF:-1,\nsong.mp3\n",
+        },
+        WriteCase {
+            name: "full metadata is preserved",
+            tracks: vec![track("song.mp3", Some("Artist - Title"), Some(210))],
+            expected: "#EXTM3U\n#EXTINF:210,Artist - Title\nsong.mp3\n",
+        },
+    ];
+
+    for case in cases {
+        let actual = write_m3u(&case.tracks);
+        assert_eq!(actual, case.expected, "case failed: {}", case.name);
+    }
+}
+
+#[test]
+fn write_pls_cases() {
+    let cases = vec![
+        WriteCase {
+            name: "missing title is omitted, missing duration defaults to -1",
+            tracks: vec![track("song.mp3", None, None)],
+            expected: "[playlist]\nFile1=song.mp3\nLength1=-1\nNumberOfEntries=1\nVersion=2\n",
+        },
+        WriteCase {
+            name: "full metadata is preserved and numbered from 1",
+            tracks: vec![
+                track("song1.mp3", Some("First"), Some(100)),
+                track("song2.mp3", Some("Second"), Some(200)),
+            ],
+            expected: "[playlist]\nFile1=song1.mp3\nTitle1=First\nLength1=100\n\
+                       File2=song2.mp3\nTitle2=Second\nLength2=200\n\
+                       NumberOfEntries=2\nVersion=2\n",
+        },
+    ];
+
+    for case in cases {
+        let actual = write_pls(&case.tracks);
+        assert_eq!(actual, case.expected, "case failed: {}", case.name);
+    }
+}

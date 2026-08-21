@@ -1,0 +1,12 @@
+[package]
+name = "playlist-bridge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Converts audio playlists between M3U/M3U8 and PLS"
+
+[[bin]]
+name = "playlist-bridge"
+path = "src/main.rs"
+
+[dependencies]
