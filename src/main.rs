@@ -1,3 +1,4 @@
+use playlist_bridge::cli::{parse_args, USAGE};
 use playlist_bridge::playlist::{parse_m3u, parse_pls, write_m3u, write_pls, Format};
 use std::env;
 use std::fs;
@@ -5,22 +6,33 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        eprintln!("usage: playlist-bridge <input> <output>");
-        eprintln!("format is chosen from the file extension: .m3u, .m3u8, or .pls");
-        return ExitCode::FAILURE;
-    }
-
-    let input_path = &args[1];
-    let output_path = &args[2];
-
-    let Some(input_format) = Format::from_path(input_path) else {
-        eprintln!("cannot tell playlist format from input extension: {}", input_path);
-        return ExitCode::FAILURE;
+    let parsed = match parse_args(&args[1..]) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            eprintln!("{}", err);
+            eprintln!("format is chosen from the file extension unless --from/--to is given");
+            return ExitCode::FAILURE;
+        }
     };
-    let Some(output_format) = Format::from_path(output_path) else {
-        eprintln!("cannot tell playlist format from output extension: {}", output_path);
-        return ExitCode::FAILURE;
+
+    let input_path = &parsed.input;
+    let output_path = &parsed.output;
+
+    let input_format = match parsed.from.or_else(|| Format::from_path(input_path)) {
+        Some(format) => format,
+        None => {
+            eprintln!("cannot tell playlist format from input extension: {}", input_path);
+            eprintln!("{}", USAGE);
+            return ExitCode::FAILURE;
+        }
+    };
+    let output_format = match parsed.to.or_else(|| Format::from_path(output_path)) {
+        Some(format) => format,
+        None => {
+            eprintln!("cannot tell playlist format from output extension: {}", output_path);
+            eprintln!("{}", USAGE);
+            return ExitCode::FAILURE;
+        }
     };
 
     let contents = match fs::read_to_string(input_path) {

@@ -24,7 +24,13 @@ impl Format {
     /// don't recognize so the caller can fail loudly instead of guessing.
     pub fn from_path<P: AsRef<Path>>(path: P) -> Option<Format> {
         let ext = path.as_ref().extension()?.to_str()?.to_ascii_lowercase();
-        match ext.as_str() {
+        Format::from_name(&ext)
+    }
+
+    /// Picks a format from an explicit name, e.g. a `--from`/`--to` flag
+    /// value. Accepts the same names as the file extensions it mirrors.
+    pub fn from_name(name: &str) -> Option<Format> {
+        match name.to_ascii_lowercase().as_str() {
             "m3u" | "m3u8" => Some(Format::M3u),
             "pls" => Some(Format::Pls),
             _ => None,

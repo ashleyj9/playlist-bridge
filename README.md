@@ -14,11 +14,17 @@ direction.
 ## Usage
 
 ```
-playlist-bridge <input> <output>
+playlist-bridge [--from FORMAT] [--to FORMAT] <input> <output>
 ```
 
 The format on each side is picked from the file extension: `.m3u` and
-`.m3u8` are treated as M3U, `.pls` as PLS.
+`.m3u8` are treated as M3U, `.pls` as PLS. Use `--from`/`--to` (values
+`m3u`, `m3u8`, or `pls`, case-insensitive) to override that when a file
+doesn't carry a recognized extension, e.g. a playlist exported as `.txt`:
+
+```
+$ playlist-bridge --from m3u exported.txt road_trip.pls
+```
 
 ```
 $ cat road_trip.m3u
@@ -65,7 +71,8 @@ Both formats look simple but have a handful of quirks in the wild:
 - Windows-style line endings.
 
 These cases are covered by a table-driven test suite in
-`tests/conversion.rs`.
+`tests/conversion.rs`, and argument parsing (including `--from`/`--to`)
+is covered separately in `tests/cli.rs`.
 
 ## Building
 
