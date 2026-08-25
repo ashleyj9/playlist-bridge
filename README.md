@@ -69,6 +69,12 @@ Both formats look simple but have a handful of quirks in the wild:
 - Titles that themselves contain a comma, which would otherwise break a
   naive split on the M3U `#EXTINF:` line.
 - Windows-style line endings.
+- Relative paths, which get rewritten so they still resolve after the
+  conversion. A track referenced as `boc/roygbiv.mp3` from
+  `music/road_trip.m3u` becomes `../music/boc/roygbiv.mp3` if you convert it
+  to `out/road_trip.pls`, since it now has to be reached from a different
+  directory. Absolute paths, Windows drive-letter paths, and URLs are left
+  alone.
 
 These cases are covered by a table-driven test suite in
 `tests/conversion.rs`, and argument parsing (including `--from`/`--to`)

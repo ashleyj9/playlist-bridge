@@ -1,4 +1,5 @@
-use playlist_bridge::playlist::{parse_m3u, parse_pls, write_m3u, write_pls, Track};
+use playlist_bridge::playlist::{dir_of, parse_m3u, parse_pls, rebase_path, write_m3u, write_pls, Track};
+use std::path::{Path, PathBuf};
 
 fn track(path: &str, title: Option<&str>, duration: Option<i64>) -> Track {
     Track { path: path.to_string(), title: title.map(str::to_string), duration }
@@ -155,6 +156,101 @@ fn write_pls_cases() {
 
     for case in cases {
         let actual = write_pls(&case.tracks);
+        assert_eq!(actual, case.expected, "case failed: {}", case.name);
+    }
+}
+
+#[test]
+fn dir_of_cases() {
+    struct Case {
+        name: &'static str,
+        input: &'static str,
+        expected: &'static str,
+    }
+
+    let cases = vec![
+        Case { name: "bare filename has no directory", input: "playlist.m3u", expected: "." },
+        Case { name: "nested path keeps its parent", input: "music/playlist.m3u", expected: "music" },
+        Case { name: "deeply nested path keeps its full parent", input: "a/b/c/playlist.m3u", expected: "a/b/c" },
+    ];
+
+    for case in cases {
+        let actual = dir_of(case.input);
+        assert_eq!(actual, PathBuf::from(case.expected), "case failed: {}", case.name);
+    }
+}
+
+#[test]
+fn rebase_path_cases() {
+    struct Case {
+        name: &'static str,
+        path: &'static str,
+        from_dir: &'static str,
+        to_dir: &'static str,
+        expected: &'static str,
+    }
+
+    let cases = vec![
+        Case {
+            name: "same directory leaves a relative path untouched",
+            path: "song.mp3",
+            from_dir: "music",
+            to_dir: "music",
+            expected: "song.mp3",
+        },
+        Case {
+            name: "output moving to a sibling directory climbs back out",
+            path: "boc/roygbiv.mp3",
+            from_dir: "music",
+            to_dir: "out",
+            expected: "../music/boc/roygbiv.mp3",
+        },
+        Case {
+            name: "output moving into a subdirectory of the input climbs up once",
+            path: "song.mp3",
+            from_dir: ".",
+            to_dir: "playlists",
+            expected: "../song.mp3",
+        },
+        Case {
+            name: "output moving deeper than the input shares no climb",
+            path: "song.mp3",
+            from_dir: "music",
+            to_dir: "music/playlists",
+            expected: "../song.mp3",
+        },
+        Case {
+            name: "absolute unix paths pass through untouched",
+            path: "/library/song.mp3",
+            from_dir: "music",
+            to_dir: "out",
+            expected: "/library/song.mp3",
+        },
+        Case {
+            name: "windows drive-letter paths pass through untouched",
+            path: "C:\\Music\\song.mp3",
+            from_dir: "music",
+            to_dir: "out",
+            expected: "C:\\Music\\song.mp3",
+        },
+        Case {
+            name: "http urls pass through untouched",
+            path: "http://stream.example.com/live",
+            from_dir: "music",
+            to_dir: "out",
+            expected: "http://stream.example.com/live",
+        },
+        Case {
+            name: "a redundant ./ in the source directory is ignored",
+            path: "song.mp3",
+            from_dir: "./music",
+            to_dir: "out",
+            expected: "../music/song.mp3",
+        },
+    ];
+
+    for case in cases {
+        let actual = rebase_path(case.path, Path::new(case.from_dir), Path::new(case.to_dir));
         assert_eq!(actual, case.expected, "case failed: {}", case.name);
     }
 }

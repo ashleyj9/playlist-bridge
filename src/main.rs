@@ -1,5 +1,5 @@
 use playlist_bridge::cli::{parse_args, USAGE};
-use playlist_bridge::playlist::{parse_m3u, parse_pls, write_m3u, write_pls, Format};
+use playlist_bridge::playlist::{dir_of, parse_m3u, parse_pls, rebase_path, write_m3u, write_pls, Format, Track};
 use std::env;
 use std::fs;
 use std::process::ExitCode;
@@ -47,6 +47,16 @@ fn main() -> ExitCode {
         Format::M3u => parse_m3u(&contents),
         Format::Pls => parse_pls(&contents),
     };
+
+    // Entries with a relative path are anchored to the input playlist's own
+    // directory; if the output file lands somewhere else, those paths have
+    // to be rewritten or they'll point at the wrong place.
+    let from_dir = dir_of(input_path);
+    let to_dir = dir_of(output_path);
+    let tracks: Vec<Track> = tracks
+        .into_iter()
+        .map(|track| Track { path: rebase_path(&track.path, &from_dir, &to_dir), ..track })
+        .collect();
 
     let output = match output_format {
         Format::M3u => write_m3u(&tracks),

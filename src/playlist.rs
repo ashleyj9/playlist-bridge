@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// A single entry in a playlist. `title` and `duration` are optional because
 /// both M3U and PLS allow an entry to be nothing more than a path.
@@ -152,4 +152,108 @@ pub fn write_pls(tracks: &[Track]) -> String {
     out.push_str(&format!("NumberOfEntries={}\n", tracks.len()));
     out.push_str("Version=2\n");
     out
+}
+
+/// Returns the directory a playlist file lives in, as a base for resolving
+/// its entries' relative paths. A bare filename with no directory component
+/// is anchored to `.` rather than an empty path, so joins behave the same
+/// as they would from a shell.
+pub fn dir_of(path: &str) -> PathBuf {
+    match Path::new(path).parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
+/// Rewrites a track's path so that, read from `to_dir`, it still points at
+/// the same file it pointed at when read from `from_dir`. This is what
+/// makes converting `music/road_trip.m3u` into `out/road_trip.pls` still
+/// resolve `boc/roygbiv.mp3` correctly, since the entry now has to be
+/// reached from a different directory.
+///
+/// Absolute paths, Windows drive-letter paths, and URLs are left alone,
+/// since none of those are anchored to the playlist's own location to
+/// begin with.
+pub fn rebase_path(path: &str, from_dir: &Path, to_dir: &Path) -> String {
+    if is_url(path) || is_absolute_like(path) {
+        return path.to_string();
+    }
+
+    let target = lexically_normalize(&from_dir.join(path));
+    let base = lexically_normalize(to_dir);
+
+    match relative_from(&base, &target) {
+        Some(rel) => rel.to_string_lossy().into_owned(),
+        None => target.to_string_lossy().into_owned(),
+    }
+}
+
+fn is_url(path: &str) -> bool {
+    match path.split_once("://") {
+        Some((scheme, _)) => {
+            !scheme.is_empty() && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        }
+        None => false,
+    }
+}
+
+/// `Path::is_absolute` only understands the host platform's own convention,
+/// so a Windows drive-letter path like `C:\Music\song.mp3` reads as
+/// "relative" when we're running on Unix. Playlists move between platforms
+/// more often than the paths in them do, so we check for that shape too.
+fn is_absolute_like(path: &str) -> bool {
+    if Path::new(path).is_absolute() {
+        return true;
+    }
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+}
+
+/// Resolves `.` and `..` components against each other without touching the
+/// filesystem. The paths being rebased point at media files that don't need
+/// to exist for this tool to run, so this can't be a real `canonicalize`.
+fn lexically_normalize(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !result.pop() {
+                    result.push("..");
+                }
+            }
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result
+}
+
+/// Expresses `target` relative to `base`, both already lexically normalized.
+/// Returns None if the two don't share an absolute/relative footing, since
+/// there's no sound way to relate them without hitting the filesystem.
+fn relative_from(base: &Path, target: &Path) -> Option<PathBuf> {
+    if base.is_absolute() != target.is_absolute() {
+        return None;
+    }
+
+    let base_parts: Vec<_> = base.components().collect();
+    let target_parts: Vec<_> = target.components().collect();
+    let common = base_parts.iter().zip(target_parts.iter()).take_while(|(a, b)| a == b).count();
+
+    let mut result = PathBuf::new();
+    for _ in &base_parts[common..] {
+        result.push("..");
+    }
+    for component in &target_parts[common..] {
+        result.push(component.as_os_str());
+    }
+
+    if result.as_os_str().is_empty() {
+        result.push(".");
+    }
+
+    Some(result)
 }
