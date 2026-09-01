@@ -69,6 +69,9 @@ Both formats look simple but have a handful of quirks in the wild:
 - Titles that themselves contain a comma, which would otherwise break a
   naive split on the M3U `#EXTINF:` line.
 - Windows-style line endings.
+- Input files that aren't UTF-8. Older Winamp/Windows-era playlists are
+  often plain Latin-1 (ISO-8859-1); those are detected and decoded rather
+  than rejected. Output is always written as UTF-8.
 - Relative paths, which get rewritten so they still resolve after the
   conversion. A track referenced as `boc/roygbiv.mp3` from
   `music/road_trip.m3u` becomes `../music/boc/roygbiv.mp3` if you convert it

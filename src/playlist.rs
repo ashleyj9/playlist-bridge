@@ -38,6 +38,22 @@ impl Format {
     }
 }
 
+/// Decodes raw playlist bytes into text. Modern exports are UTF-8, but a lot
+/// of playlists written by older Winamp/Windows-era tools are plain Latin-1
+/// (ISO-8859-1), which has no invalid byte sequences of its own and so just
+/// silently misdecodes as mangled text under strict UTF-8 rather than
+/// failing outright. We try UTF-8 first since it's dominant today, and only
+/// fall back to Latin-1 when the bytes actually aren't valid UTF-8; a byte's
+/// value there is its Unicode code point by definition, so the fallback
+/// can't fail either.
+pub fn decode_playlist_bytes(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+    }
+}
+
 /// Parses M3U/M3U8 text into tracks. Any line starting with `#` that isn't
 /// `#EXTINF:` (including the `#EXTM3U` header) is treated as a comment and
 /// dropped, matching how real players behave.

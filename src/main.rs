@@ -1,5 +1,7 @@
 use playlist_bridge::cli::{parse_args, USAGE};
-use playlist_bridge::playlist::{dir_of, parse_m3u, parse_pls, rebase_path, write_m3u, write_pls, Format, Track};
+use playlist_bridge::playlist::{
+    decode_playlist_bytes, dir_of, parse_m3u, parse_pls, rebase_path, write_m3u, write_pls, Format, Track,
+};
 use std::env;
 use std::fs;
 use std::process::ExitCode;
@@ -35,8 +37,8 @@ fn main() -> ExitCode {
         }
     };
 
-    let contents = match fs::read_to_string(input_path) {
-        Ok(contents) => contents,
+    let contents = match fs::read(input_path) {
+        Ok(bytes) => decode_playlist_bytes(&bytes),
         Err(err) => {
             eprintln!("failed to read {}: {}", input_path, err);
             return ExitCode::FAILURE;

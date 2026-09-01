@@ -1,4 +1,4 @@
-use playlist_bridge::playlist::{dir_of, parse_m3u, parse_pls, rebase_path, write_m3u, write_pls, Track};
+use playlist_bridge::playlist::{decode_playlist_bytes, dir_of, parse_m3u, parse_pls, rebase_path, write_m3u, write_pls, Track};
 use std::path::{Path, PathBuf};
 
 fn track(path: &str, title: Option<&str>, duration: Option<i64>) -> Track {
@@ -156,6 +156,35 @@ fn write_pls_cases() {
 
     for case in cases {
         let actual = write_pls(&case.tracks);
+        assert_eq!(actual, case.expected, "case failed: {}", case.name);
+    }
+}
+
+#[test]
+fn decode_playlist_bytes_cases() {
+    struct Case {
+        name: &'static str,
+        input: &'static [u8],
+        expected: &'static str,
+    }
+
+    let cases = vec![
+        Case { name: "plain ascii decodes unchanged", input: b"song.mp3", expected: "song.mp3" },
+        Case { name: "valid utf-8 passes through untouched", input: "Café del Mar.mp3".as_bytes(), expected: "Café del Mar.mp3" },
+        Case {
+            name: "a leading utf-8 bom is stripped",
+            input: &[0xEF, 0xBB, 0xBF, b's', b'o', b'n', b'g', b'.', b'm', b'p', b'3'],
+            expected: "song.mp3",
+        },
+        Case {
+            name: "bytes that aren't valid utf-8 fall back to latin-1",
+            input: &[b'c', b'a', b'f', 0xE9, b'.', b'm', b'p', b'3'],
+            expected: "café.mp3",
+        },
+    ];
+
+    for case in cases {
+        let actual = decode_playlist_bytes(case.input);
         assert_eq!(actual, case.expected, "case failed: {}", case.name);
     }
 }
