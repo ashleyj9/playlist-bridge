@@ -72,6 +72,10 @@ Both formats look simple but have a handful of quirks in the wild:
 - Input files that aren't UTF-8. Older Winamp/Windows-era playlists are
   often plain Latin-1 (ISO-8859-1); those are detected and decoded rather
   than rejected. Output is always written as UTF-8.
+- Extended M3U directives such as `#EXTVLCOPT:` that appear between a
+  track's `#EXTINF` line and its path. These are kept and re-emitted on an
+  M3U-to-M3U conversion; converting to PLS drops them, since PLS has no
+  equivalent place to put them.
 - Relative paths, which get rewritten so they still resolve after the
   conversion. A track referenced as `boc/roygbiv.mp3` from
   `music/road_trip.m3u` becomes `../music/boc/roygbiv.mp3` if you convert it

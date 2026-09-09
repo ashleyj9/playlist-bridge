@@ -11,6 +11,12 @@ pub struct Track {
     /// formats, but we keep that as a real Some(-1) rather than folding it
     /// into None, since a writer still has to emit something for it.
     pub duration: Option<i64>,
+    /// Extended M3U directives (e.g. `#EXTVLCOPT:network-caching=1000`) that
+    /// appeared between this track's `#EXTINF` line and its path, kept
+    /// verbatim including the leading `#`. PLS has no equivalent concept, so
+    /// these only survive an M3U-to-M3U round trip; converting to PLS just
+    /// drops them rather than inventing somewhere to put them.
+    pub directives: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,12 +60,15 @@ pub fn decode_playlist_bytes(bytes: &[u8]) -> String {
     }
 }
 
-/// Parses M3U/M3U8 text into tracks. Any line starting with `#` that isn't
-/// `#EXTINF:` (including the `#EXTM3U` header) is treated as a comment and
-/// dropped, matching how real players behave.
+/// Parses M3U/M3U8 text into tracks. `#EXTM3U` is dropped as a bare header.
+/// Other extended directives (`#EXTVLCOPT:`, `#EXTGRP:`, and anything else
+/// starting `#EXT` that isn't `#EXTINF:`) are kept verbatim and attached to
+/// whichever track comes next, since that's how players emit and read them.
+/// Any other `#`-prefixed line is a plain comment and is dropped.
 pub fn parse_m3u(input: &str) -> Vec<Track> {
     let mut tracks = Vec::new();
-    let mut pending: Option<(Option<i64>, Option<String>)> = None;
+    let mut pending_meta: Option<(Option<i64>, Option<String>)> = None;
+    let mut pending_directives: Vec<String> = Vec::new();
 
     for raw_line in input.lines() {
         let line = raw_line.trim_end_matches('\r').trim();
@@ -79,7 +88,16 @@ pub fn parse_m3u(input: &str) -> Vec<Track> {
                 }
                 None => (rest.trim().parse::<i64>().ok(), None),
             };
-            pending = Some((duration, title));
+            pending_meta = Some((duration, title));
+            continue;
+        }
+
+        if line == "#EXTM3U" {
+            continue;
+        }
+
+        if line.starts_with("#EXT") {
+            pending_directives.push(line.to_string());
             continue;
         }
 
@@ -87,8 +105,9 @@ pub fn parse_m3u(input: &str) -> Vec<Track> {
             continue;
         }
 
-        let (duration, title) = pending.take().unwrap_or((None, None));
-        tracks.push(Track { path: line.to_string(), title, duration });
+        let (duration, title) = pending_meta.take().unwrap_or((None, None));
+        let directives = std::mem::take(&mut pending_directives);
+        tracks.push(Track { path: line.to_string(), title, duration, directives });
     }
 
     tracks
@@ -96,13 +115,20 @@ pub fn parse_m3u(input: &str) -> Vec<Track> {
 
 /// Writes tracks back out as M3U. We always emit an `#EXTINF` line so the
 /// output is unambiguous even when the source had none; unknown title and
-/// duration become "" and -1, the same defaults most players use.
+/// duration become "" and -1, the same defaults most players use. Any
+/// directives carried on the track (see `Track::directives`) are re-emitted
+/// right after `#EXTINF` and before the path, matching where players put
+/// them on write.
 pub fn write_m3u(tracks: &[Track]) -> String {
     let mut out = String::from("#EXTM3U\n");
     for track in tracks {
         let duration = track.duration.unwrap_or(-1);
         let title = track.title.as_deref().unwrap_or("");
         out.push_str(&format!("#EXTINF:{},{}\n", duration, title));
+        for directive in &track.directives {
+            out.push_str(directive);
+            out.push('\n');
+        }
         out.push_str(&track.path);
         out.push('\n');
     }
@@ -150,6 +176,7 @@ pub fn parse_pls(input: &str) -> Vec<Track> {
             path,
             title: titles.get(&idx).cloned(),
             duration: lengths.get(&idx).copied(),
+            directives: Vec::new(),
         })
         .collect()
 }

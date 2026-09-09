@@ -2,7 +2,16 @@ use playlist_bridge::playlist::{decode_playlist_bytes, dir_of, parse_m3u, parse_
 use std::path::{Path, PathBuf};
 
 fn track(path: &str, title: Option<&str>, duration: Option<i64>) -> Track {
-    Track { path: path.to_string(), title: title.map(str::to_string), duration }
+    Track { path: path.to_string(), title: title.map(str::to_string), duration, directives: Vec::new() }
+}
+
+fn track_ext(path: &str, title: Option<&str>, duration: Option<i64>, directives: &[&str]) -> Track {
+    Track {
+        path: path.to_string(),
+        title: title.map(str::to_string),
+        duration,
+        directives: directives.iter().map(|s| s.to_string()).collect(),
+    }
 }
 
 struct ParseCase {
@@ -38,8 +47,27 @@ fn parse_m3u_cases() {
             expected: vec![track("song.mp3", Some("Artist, Feat. Someone - Title"), Some(200))],
         },
         ParseCase {
-            name: "non-EXTINF comment lines are ignored, not treated as paths",
+            name: "an EXTVLCOPT directive before EXTINF is kept, not treated as a path",
             input: "#EXTM3U\n#EXTVLCOPT:some-option=1\n#EXTINF:90,Track\nsong.mp3\n",
+            expected: vec![track_ext("song.mp3", Some("Track"), Some(90), &["#EXTVLCOPT:some-option=1"])],
+        },
+        ParseCase {
+            name: "EXTVLCOPT directives after EXTINF attach to that track and reset for the next",
+            input: "#EXTINF:120,Track One\n#EXTVLCOPT:network-caching=1000\n#EXTVLCOPT:start-time=10\n\
+                    song1.mp3\n#EXTINF:90,Track Two\nsong2.mp3\n",
+            expected: vec![
+                track_ext(
+                    "song1.mp3",
+                    Some("Track One"),
+                    Some(120),
+                    &["#EXTVLCOPT:network-caching=1000", "#EXTVLCOPT:start-time=10"],
+                ),
+                track("song2.mp3", Some("Track Two"), Some(90)),
+            ],
+        },
+        ParseCase {
+            name: "a plain # comment is dropped, not kept as a directive",
+            input: "#EXTINF:90,Track\n# just a note\nsong.mp3\n",
             expected: vec![track("song.mp3", Some("Track"), Some(90))],
         },
         ParseCase {
@@ -125,6 +153,16 @@ fn write_m3u_cases() {
             name: "full metadata is preserved",
             tracks: vec![track("song.mp3", Some("Artist - Title"), Some(210))],
             expected: "#EXTM3U\n#EXTINF:210,Artist - Title\nsong.mp3\n",
+        },
+        WriteCase {
+            name: "directives are re-emitted between EXTINF and the path",
+            tracks: vec![track_ext(
+                "song.mp3",
+                Some("Title"),
+                Some(100),
+                &["#EXTVLCOPT:network-caching=1000"],
+            )],
+            expected: "#EXTM3U\n#EXTINF:100,Title\n#EXTVLCOPT:network-caching=1000\nsong.mp3\n",
         },
     ];
 
