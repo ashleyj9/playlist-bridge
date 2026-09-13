@@ -1,4 +1,6 @@
-use playlist_bridge::playlist::{decode_playlist_bytes, dir_of, parse_m3u, parse_pls, rebase_path, write_m3u, write_pls, Track};
+use playlist_bridge::playlist::{
+    decode_playlist_bytes, dir_of, parse_m3u, parse_pls, parse_xspf, rebase_path, write_m3u, write_pls, write_xspf, Track,
+};
 use std::path::{Path, PathBuf};
 
 fn track(path: &str, title: Option<&str>, duration: Option<i64>) -> Track {
@@ -194,6 +196,138 @@ fn write_pls_cases() {
 
     for case in cases {
         let actual = write_pls(&case.tracks);
+        assert_eq!(actual, case.expected, "case failed: {}", case.name);
+    }
+}
+
+#[test]
+fn parse_xspf_cases() {
+    let cases = vec![
+        ParseCase {
+            name: "a track with just a location",
+            input: "<playlist><trackList><track><location>song.mp3</location></track></trackList></playlist>",
+            expected: vec![track("song.mp3", None, None)],
+        },
+        ParseCase {
+            name: "creator and title combine like the M3U EXTINF convention",
+            input: "<playlist><trackList><track>\
+                    <location>song.mp3</location><creator>Boards of Canada</creator><title>Roygbiv</title>\
+                    </track></trackList></playlist>",
+            expected: vec![track("song.mp3", Some("Boards of Canada - Roygbiv"), None)],
+        },
+        ParseCase {
+            name: "a title with no creator is used as-is",
+            input: "<playlist><trackList><track><location>song.mp3</location><title>Just a Title</title></track></trackList></playlist>",
+            expected: vec![track("song.mp3", Some("Just a Title"), None)],
+        },
+        ParseCase {
+            name: "duration is milliseconds and is divided down to whole seconds",
+            input: "<playlist><trackList><track><location>song.mp3</location><duration>245000</duration></track></trackList></playlist>",
+            expected: vec![track("song.mp3", None, Some(245))],
+        },
+        ParseCase {
+            name: "a file uri location is decoded to a plain path, percent-encoding included",
+            input: "<playlist><trackList><track><location>file:///music/song%20one.mp3</location></track></trackList></playlist>",
+            expected: vec![track("/music/song one.mp3", None, None)],
+        },
+        ParseCase {
+            name: "a stream url location is left exactly as written",
+            input: "<playlist><trackList><track><location>http://example.com/stream%2Ffile</location></track></trackList></playlist>",
+            expected: vec![track("http://example.com/stream%2Ffile", None, None)],
+        },
+        ParseCase {
+            name: "xml entities in track text are decoded",
+            input: "<playlist><trackList><track><location>song.mp3</location><title>Rock &amp; Roll</title></track></trackList></playlist>",
+            expected: vec![track("song.mp3", Some("Rock & Roll"), None)],
+        },
+        ParseCase {
+            name: "a self-closing track with no content is skipped",
+            input: "<playlist><trackList><track/></trackList></playlist>",
+            expected: vec![],
+        },
+        ParseCase {
+            name: "multiple tracks are parsed in order",
+            input: "<playlist><trackList>\
+                    <track><location>song1.mp3</location></track>\
+                    <track><location>song2.mp3</location></track>\
+                    </trackList></playlist>",
+            expected: vec![track("song1.mp3", None, None), track("song2.mp3", None, None)],
+        },
+    ];
+
+    for case in cases {
+        let actual = parse_xspf(case.input);
+        assert_eq!(actual, case.expected, "case failed: {}", case.name);
+    }
+}
+
+#[test]
+fn write_xspf_cases() {
+    let cases = vec![
+        WriteCase {
+            name: "missing title and duration omit those elements entirely",
+            tracks: vec![track("song.mp3", None, None)],
+            expected: concat!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+                "<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\">\n",
+                "  <trackList>\n",
+                "    <track>\n",
+                "      <location>song.mp3</location>\n",
+                "    </track>\n",
+                "  </trackList>\n",
+                "</playlist>\n",
+            ),
+        },
+        WriteCase {
+            name: "full metadata is preserved, duration converted to milliseconds",
+            tracks: vec![track("song.mp3", Some("Artist - Title"), Some(210))],
+            expected: concat!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+                "<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\">\n",
+                "  <trackList>\n",
+                "    <track>\n",
+                "      <location>song.mp3</location>\n",
+                "      <title>Artist - Title</title>\n",
+                "      <duration>210000</duration>\n",
+                "    </track>\n",
+                "  </trackList>\n",
+                "</playlist>\n",
+            ),
+        },
+        WriteCase {
+            name: "the -1 unknown-duration sentinel is omitted, not written as -1000",
+            tracks: vec![track("song.mp3", Some("Title"), Some(-1))],
+            expected: concat!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+                "<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\">\n",
+                "  <trackList>\n",
+                "    <track>\n",
+                "      <location>song.mp3</location>\n",
+                "      <title>Title</title>\n",
+                "    </track>\n",
+                "  </trackList>\n",
+                "</playlist>\n",
+            ),
+        },
+        WriteCase {
+            name: "special characters in a title are escaped",
+            tracks: vec![track("song.mp3", Some("Rock & Roll <Live>"), None)],
+            expected: concat!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+                "<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\">\n",
+                "  <trackList>\n",
+                "    <track>\n",
+                "      <location>song.mp3</location>\n",
+                "      <title>Rock &amp; Roll &lt;Live&gt;</title>\n",
+                "    </track>\n",
+                "  </trackList>\n",
+                "</playlist>\n",
+            ),
+        },
+    ];
+
+    for case in cases {
+        let actual = write_xspf(&case.tracks);
         assert_eq!(actual, case.expected, "case failed: {}", case.name);
     }
 }

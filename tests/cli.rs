@@ -39,6 +39,11 @@ fn parse_args_ok_cases() {
             input: args(&["in.txt", "out.txt", "--from", "pls", "--to", "m3u"]),
             expected: Args { input: "in.txt".to_string(), output: "out.txt".to_string(), from: Some(Format::Pls), to: Some(Format::M3u) },
         },
+        Case {
+            name: "xspf is a recognized format name",
+            input: args(&["--from", "xspf", "in.txt", "out.pls"]),
+            expected: Args { input: "in.txt".to_string(), output: "out.pls".to_string(), from: Some(Format::Xspf), to: None },
+        },
     ];
 
     for case in cases {
@@ -60,7 +65,7 @@ fn parse_args_error_cases() {
         Case { name: "three positional arguments", input: args(&["a", "b", "c"]) },
         Case { name: "--from with no value", input: args(&["in.m3u", "out.pls", "--from"]) },
         Case { name: "--to with no value", input: args(&["--to"]) },
-        Case { name: "--from with an unknown format name", input: args(&["--from", "xspf", "in.txt", "out.pls"]) },
+        Case { name: "--from with an unknown format name", input: args(&["--from", "ogg", "in.txt", "out.pls"]) },
         Case { name: "--to with an unknown format name", input: args(&["in.m3u", "--to", "wav", "out.txt"]) },
     ];
 

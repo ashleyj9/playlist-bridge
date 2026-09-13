@@ -1,14 +1,16 @@
 # playlist-bridge
 
-A command-line tool that converts audio playlists between M3U/M3U8 and PLS.
+A command-line tool that converts audio playlists between M3U/M3U8, PLS,
+and XSPF.
 
 ## Why
 
 M3U and M3U8 are what most modern players write, but a lot of older
 software, some car head units, and a handful of streaming clients still only
-speak PLS. Moving a playlist from one world to the other by hand means
-manually renumbering `FileN=` lines, which nobody wants to do for a
-200-track playlist. This does that conversion in one step, in either
+speak PLS, and some web-based players expect XSPF instead. Moving a
+playlist from one world to the other by hand means manually renumbering
+`FileN=` lines or hand-editing XML, which nobody wants to do for a
+200-track playlist. This does that conversion in one step, in any
 direction.
 
 ## Usage
@@ -18,9 +20,10 @@ playlist-bridge [--from FORMAT] [--to FORMAT] <input> <output>
 ```
 
 The format on each side is picked from the file extension: `.m3u` and
-`.m3u8` are treated as M3U, `.pls` as PLS. Use `--from`/`--to` (values
-`m3u`, `m3u8`, or `pls`, case-insensitive) to override that when a file
-doesn't carry a recognized extension, e.g. a playlist exported as `.txt`:
+`.m3u8` are treated as M3U, `.pls` as PLS, `.xspf` as XSPF. Use
+`--from`/`--to` (values `m3u`, `m3u8`, `pls`, or `xspf`, case-insensitive)
+to override that when a file doesn't carry a recognized extension, e.g. a
+playlist exported as `.txt`:
 
 ```
 $ playlist-bridge --from m3u exported.txt road_trip.pls
@@ -57,7 +60,7 @@ $ playlist-bridge road_trip.pls road_trip.m3u
 
 ## What it handles
 
-Both formats look simple but have a handful of quirks in the wild:
+These formats look simple but have a handful of quirks in the wild:
 
 - Entries with no metadata at all, just a bare path.
 - `Length` / duration of `-1`, which conventionally means "unknown", not
@@ -74,8 +77,24 @@ Both formats look simple but have a handful of quirks in the wild:
   than rejected. Output is always written as UTF-8.
 - Extended M3U directives such as `#EXTVLCOPT:` that appear between a
   track's `#EXTINF` line and its path. These are kept and re-emitted on an
-  M3U-to-M3U conversion; converting to PLS drops them, since PLS has no
-  equivalent place to put them.
+  M3U-to-M3U conversion; converting to PLS or XSPF drops them, since
+  neither has an equivalent place to put them.
+- XSPF's `duration` is milliseconds, not seconds like M3U/PLS; it's
+  converted on the way in and out. XSPF also splits a track's metadata into
+  separate `creator` (artist) and `title` elements rather than one
+  free-text title; those are combined into `Artist - Title` the same way
+  M3U's `#EXTINF` convention already does, so a track's title means the
+  same thing across all three formats. That combination can't be reliably
+  split back apart, so converting to XSPF never emits a separate
+  `<creator>`. A `<duration>` is only written for a genuine known value;
+  XSPF has no "unknown" sentinel like M3U/PLS's `-1`, so an unknown
+  duration is just omitted.
+- XSPF's `location` is a URI. A `file://` URI or a bare relative path are
+  both accepted on read, with percent-encoding decoded either way; anything
+  else with a recognized scheme (`http://` and so on) is treated as a
+  stream URL and left untouched. On write, local paths are emitted bare
+  rather than wrapped in a `file://` URI, since a relative or absolute path
+  is already a valid URI reference on its own.
 - Relative paths, which get rewritten so they still resolve after the
   conversion. A track referenced as `boc/roygbiv.mp3` from
   `music/road_trip.m3u` becomes `../music/boc/roygbiv.mp3` if you convert it

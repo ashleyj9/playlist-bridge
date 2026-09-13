@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 /// A single entry in a playlist. `title` and `duration` are optional because
-/// both M3U and PLS allow an entry to be nothing more than a path.
+/// M3U, PLS, and XSPF all allow an entry to be nothing more than a path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Track {
     pub path: String,
@@ -13,9 +13,10 @@ pub struct Track {
     pub duration: Option<i64>,
     /// Extended M3U directives (e.g. `#EXTVLCOPT:network-caching=1000`) that
     /// appeared between this track's `#EXTINF` line and its path, kept
-    /// verbatim including the leading `#`. PLS has no equivalent concept, so
-    /// these only survive an M3U-to-M3U round trip; converting to PLS just
-    /// drops them rather than inventing somewhere to put them.
+    /// verbatim including the leading `#`. Neither PLS nor XSPF has an
+    /// equivalent concept, so these only survive an M3U-to-M3U round trip;
+    /// converting to PLS or XSPF just drops them rather than inventing
+    /// somewhere to put them.
     pub directives: Vec<String>,
 }
 
@@ -23,6 +24,7 @@ pub struct Track {
 pub enum Format {
     M3u,
     Pls,
+    Xspf,
 }
 
 impl Format {
@@ -39,6 +41,7 @@ impl Format {
         match name.to_ascii_lowercase().as_str() {
             "m3u" | "m3u8" => Some(Format::M3u),
             "pls" => Some(Format::Pls),
+            "xspf" => Some(Format::Xspf),
             _ => None,
         }
     }
@@ -195,6 +198,244 @@ pub fn write_pls(tracks: &[Track]) -> String {
     out.push_str(&format!("NumberOfEntries={}\n", tracks.len()));
     out.push_str("Version=2\n");
     out
+}
+
+/// Parses XSPF (XML Shareable Playlist Format) text into tracks. XSPF is
+/// XML rather than the line-based text of M3U/PLS, so parsing here is a
+/// small hand-rolled scan for the handful of elements we care about (see
+/// `next_element`) rather than a general XML parser; nothing else in an
+/// XSPF file (its exact wrapping, extension elements, attributes) matters
+/// to us.
+///
+/// Two of XSPF's fields don't line up with the simpler M3U/PLS model:
+/// - `duration` is milliseconds, not seconds, and gets divided down.
+/// - track metadata is split into separate `creator` (artist) and `title`
+///   elements rather than one free-text title. We combine them the same
+///   way M3U's `#EXTINF` convention does, as "Artist - Title", so a
+///   track's `title` field means the same thing across all three formats.
+pub fn parse_xspf(input: &str) -> Vec<Track> {
+    let mut tracks = Vec::new();
+    let mut pos = 0;
+    while let Some((block, end)) = next_element(input, pos, "track") {
+        pos = end;
+        let Some(location) = child_text(block, "location") else { continue };
+        let creator = child_text(block, "creator").map(decode_xml_text);
+        let title = child_text(block, "title").map(decode_xml_text);
+        let duration = child_text(block, "duration").and_then(|s| s.parse::<i64>().ok()).map(|ms| ms / 1000);
+        tracks.push(Track {
+            path: location_to_path(&decode_xml_text(location)),
+            title: combine_title(creator, title),
+            duration,
+            directives: Vec::new(),
+        });
+    }
+    tracks
+}
+
+/// Writes tracks back out as XSPF. A `<duration>` is only emitted when we
+/// have a genuine non-negative value; XSPF defines duration as a
+/// non-negative integer, so the -1 "unknown" sentinel M3U/PLS use has
+/// nowhere to go and is dropped rather than written as a nonsense value.
+/// The combined "Artist - Title" produced by `parse_xspf` can't be
+/// reliably split back apart, so this never emits a separate `<creator>`.
+pub fn write_xspf(tracks: &[Track]) -> String {
+    let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    out.push_str("<playlist version=\"1\" xmlns=\"http://xspf.org/ns/0/\">\n  <trackList>\n");
+    for track in tracks {
+        out.push_str("    <track>\n");
+        out.push_str(&format!("      <location>{}</location>\n", escape_xml(&path_to_location(&track.path))));
+        if let Some(title) = &track.title {
+            out.push_str(&format!("      <title>{}</title>\n", escape_xml(title)));
+        }
+        if let Some(duration) = track.duration {
+            if duration >= 0 {
+                out.push_str(&format!("      <duration>{}</duration>\n", duration * 1000));
+            }
+        }
+        out.push_str("    </track>\n");
+    }
+    out.push_str("  </trackList>\n</playlist>\n");
+    out
+}
+
+fn combine_title(creator: Option<String>, title: Option<String>) -> Option<String> {
+    match (creator, title) {
+        (Some(creator), Some(title)) => Some(format!("{} - {}", creator, title)),
+        (Some(creator), None) => Some(creator),
+        (None, Some(title)) => Some(title),
+        (None, None) => None,
+    }
+}
+
+/// `location` is a URI in XSPF. Local files are commonly written as either
+/// a `file://` URI or, just as often in the wild, a bare relative path with
+/// no scheme at all; both are percent-decoded, since spaces and other
+/// reserved characters show up escaped either way. Anything else with a
+/// recognizable scheme (`http://` and the like) is a stream URL and is left
+/// exactly as written, since decoding it could change what it points at.
+fn location_to_path(location: &str) -> String {
+    if let Some(rest) = location.strip_prefix("file://") {
+        return percent_decode(rest);
+    }
+    if is_url(location) {
+        return location.to_string();
+    }
+    percent_decode(location)
+}
+
+/// The reverse of `location_to_path`. A bare relative or absolute path is
+/// already a valid URI reference under RFC 3986, and every other format
+/// this tool reads/writes stores paths the same bare way, so there's no
+/// need to wrap local paths in a `file://` URI on the way out.
+fn path_to_location(path: &str) -> String {
+    path.to_string()
+}
+
+fn escape_xml(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Decodes the handful of XML entities likely to show up in track text: the
+/// five predefined entities plus decimal/hex numeric character references.
+/// An unrecognized or unterminated `&...;` is left exactly as it appeared
+/// rather than guessed at.
+fn decode_xml_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '&' {
+            out.push(c);
+            continue;
+        }
+        let mut entity = String::new();
+        let mut closed = false;
+        while let Some(&next) = chars.peek() {
+            if next == ';' {
+                chars.next();
+                closed = true;
+                break;
+            }
+            if entity.len() > 10 {
+                break;
+            }
+            entity.push(next);
+            chars.next();
+        }
+        if !closed {
+            out.push('&');
+            out.push_str(&entity);
+            continue;
+        }
+        match entity.as_str() {
+            "amp" => out.push('&'),
+            "lt" => out.push('<'),
+            "gt" => out.push('>'),
+            "quot" => out.push('"'),
+            "apos" => out.push('\''),
+            _ if entity.starts_with('#') => {
+                let code = entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X"));
+                let parsed = match code {
+                    Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                    None => entity[1..].parse::<u32>().ok(),
+                };
+                match parsed.and_then(char::from_u32) {
+                    Some(ch) => out.push(ch),
+                    None => {
+                        out.push('&');
+                        out.push_str(&entity);
+                        out.push(';');
+                    }
+                }
+            }
+            _ => {
+                out.push('&');
+                out.push_str(&entity);
+                out.push(';');
+            }
+        }
+    }
+    out
+}
+
+/// Decodes `%XX` percent-encoding. XSPF locations are URIs, so this undoes
+/// escaping of spaces and other reserved characters back into the literal
+/// bytes a filesystem path expects.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
+}
+
+/// Returns the trimmed inner text of the first `<tag>` element in `block`,
+/// or `None` if it's absent or empty. Used for the leaf elements
+/// (`location`, `title`, `creator`, `duration`) inside a `<track>` block.
+fn child_text<'a>(block: &'a str, tag: &str) -> Option<&'a str> {
+    let (content, _) = next_element(block, 0, tag)?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Finds the next `<tag ...>...</tag>` element in `input` at or after
+/// `from`, tolerating attributes on the opening tag and treating a
+/// self-closing `<tag ... />` as having empty content. This is not a real
+/// XML parser: it doesn't track nesting depth, but none of the elements
+/// XSPF playlists need from us (`track`, `location`, `title`, `creator`,
+/// `duration`) contain a same-named child, so a linear scan is enough.
+/// Returns the element's content and the byte offset just past it, so
+/// callers can resume scanning for repeated elements like `<track>`.
+fn next_element<'a>(input: &'a str, from: usize, tag: &str) -> Option<(&'a str, usize)> {
+    let rest = &input[from..];
+    let open_marker = format!("<{}", tag);
+    let mut search_at = 0;
+    loop {
+        let found = rest[search_at..].find(&open_marker)?;
+        let tag_start = search_at + found;
+        let after_name = tag_start + open_marker.len();
+        let next_char = rest[after_name..].chars().next();
+        let name_ends_here = matches!(next_char, Some(c) if c.is_whitespace() || c == '>' || c == '/');
+        if !name_ends_here {
+            search_at = after_name;
+            continue;
+        }
+
+        let close_angle = after_name + rest[after_name..].find('>')?;
+        let self_closing = rest[..close_angle].ends_with('/');
+        if self_closing {
+            return Some(("", from + close_angle + 1));
+        }
+
+        let content_start = close_angle + 1;
+        let close_marker = format!("</{}>", tag);
+        let close_found = rest[content_start..].find(&close_marker)?;
+        let content_end = content_start + close_found;
+        let element_end = content_end + close_marker.len();
+        return Some((&rest[content_start..content_end], from + element_end));
+    }
 }
 
 /// Returns the directory a playlist file lives in, as a base for resolving

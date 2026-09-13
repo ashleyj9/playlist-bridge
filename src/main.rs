@@ -1,6 +1,7 @@
 use playlist_bridge::cli::{parse_args, USAGE};
 use playlist_bridge::playlist::{
-    decode_playlist_bytes, dir_of, parse_m3u, parse_pls, rebase_path, write_m3u, write_pls, Format, Track,
+    decode_playlist_bytes, dir_of, parse_m3u, parse_pls, parse_xspf, rebase_path, write_m3u, write_pls, write_xspf,
+    Format, Track,
 };
 use std::env;
 use std::fs;
@@ -48,6 +49,7 @@ fn main() -> ExitCode {
     let tracks = match input_format {
         Format::M3u => parse_m3u(&contents),
         Format::Pls => parse_pls(&contents),
+        Format::Xspf => parse_xspf(&contents),
     };
 
     // Entries with a relative path are anchored to the input playlist's own
@@ -63,6 +65,7 @@ fn main() -> ExitCode {
     let output = match output_format {
         Format::M3u => write_m3u(&tracks),
         Format::Pls => write_pls(&tracks),
+        Format::Xspf => write_xspf(&tracks),
     };
 
     if let Err(err) = fs::write(output_path, output) {
